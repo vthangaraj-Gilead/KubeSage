@@ -1,0 +1,407 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-investigator-lab
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: valid-test-config
+  namespace: ai-investigator-lab
+data:
+  app_mode: "test"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: valid-test-secret
+  namespace: ai-investigator-lab
+type: Opaque
+stringData:
+  password: "test123"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crashloop-exit1
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crashloop-exit1
+  template:
+    metadata:
+      labels:
+        app: crashloop-exit1
+    spec:
+      containers:
+      - name: app
+        image: busybox:1.36
+        command: ["sh", "-c", "echo 'Crashing intentionally'; exit 1"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bad-command
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bad-command
+  template:
+    metadata:
+      labels:
+        app: bad-command
+    spec:
+      containers:
+      - name: app
+        image: busybox:1.36
+        command: ["this-command-does-not-exist"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bad-image
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bad-image
+  template:
+    metadata:
+      labels:
+        app: bad-image
+    spec:
+      containers:
+      - name: app
+        image: nginx:this-tag-does-not-exist
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: impossible-node-selector
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: impossible-node-selector
+  template:
+    metadata:
+      labels:
+        app: impossible-node-selector
+    spec:
+      nodeSelector:
+        investigator/test-node: "does-not-exist"
+      containers:
+      - name: app
+        image: busybox:1.36
+        command: ["sh", "-c", "sleep 3600"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: missing-pvc
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: missing-pvc
+  template:
+    metadata:
+      labels:
+        app: missing-pvc
+    spec:
+      containers:
+      - name: app
+        image: busybox:1.36
+        command: ["sh", "-c", "sleep 3600"]
+        volumeMounts:
+        - name: missing-storage
+          mountPath: /data
+      volumes:
+      - name: missing-storage
+        persistentVolumeClaim:
+          claimName: pvc-that-does-not-exist
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: readiness-probe-fail
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: readiness-probe-fail
+  template:
+    metadata:
+      labels:
+        app: readiness-probe-fail
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.27
+        readinessProbe:
+          httpGet:
+            path: /does-not-exist
+            port: 80
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          failureThreshold: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: liveness-probe-fail
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: liveness-probe-fail
+  template:
+    metadata:
+      labels:
+        app: liveness-probe-fail
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.27
+        livenessProbe:
+          httpGet:
+            path: /does-not-exist
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: missing-configmap
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: missing-configmap
+  template:
+    metadata:
+      labels:
+        app: missing-configmap
+    spec:
+      containers:
+      - name: app
+        image: busybox:1.36
+        command: ["sh", "-c", "sleep 3600"]
+        envFrom:
+        - configMapRef:
+            name: config-that-does-not-exist
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: missing-secret
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: missing-secret
+  template:
+    metadata:
+      labels:
+        app: missing-secret
+    spec:
+      containers:
+      - name: app
+        image: busybox:1.36
+        command: ["sh", "-c", "sleep 3600"]
+        envFrom:
+        - secretRef:
+            name: secret-that-does-not-exist
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: missing-config-key
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: missing-config-key
+  template:
+    metadata:
+      labels:
+        app: missing-config-key
+    spec:
+      containers:
+      - name: app
+        image: busybox:1.36
+        command: ["sh", "-c", "echo MODE=$APP_MODE; sleep 3600"]
+        env:
+        - name: APP_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: valid-test-config
+              key: key-that-does-not-exist
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oomkill-test
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oomkill-test
+  template:
+    metadata:
+      labels:
+        app: oomkill-test
+    spec:
+      containers:
+      - name: app
+        image: python:3.12-alpine
+        command:
+        - sh
+        - -c
+        - |
+          python - <<'PY'
+          x = []
+          while True:
+              x.append('X' * 1024 * 1024)
+          PY
+        resources:
+          limits:
+            memory: "40Mi"
+          requests:
+            memory: "20Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: init-container-fail
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: init-container-fail
+  template:
+    metadata:
+      labels:
+        app: init-container-fail
+    spec:
+      initContainers:
+      - name: init-fail
+        image: busybox:1.36
+        command: ["sh", "-c", "echo 'init failed'; exit 1"]
+      containers:
+      - name: app
+        image: busybox:1.36
+        command: ["sh", "-c", "sleep 3600"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bad-port-probe
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bad-port-probe
+  template:
+    metadata:
+      labels:
+        app: bad-port-probe
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.27
+        livenessProbe:
+          tcpSocket:
+            port: 9999
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: completes-and-restarts
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: completes-and-restarts
+  template:
+    metadata:
+      labels:
+        app: completes-and-restarts
+    spec:
+      containers:
+      - name: app
+        image: busybox:1.36
+        command: ["sh", "-c", "echo 'done'; exit 0"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dns-fail-loop
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dns-fail-loop
+  template:
+    metadata:
+      labels:
+        app: dns-fail-loop
+    spec:
+      containers:
+      - name: app
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          nslookup does-not-exist.invalid
+          exit 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: missing-secret-volume
+  namespace: ai-investigator-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: missing-secret-volume
+  template:
+    metadata:
+      labels:
+        app: missing-secret-volume
+    spec:
+      containers:
+      - name: app
+        image: busybox:1.36
+        command: ["sh", "-c", "sleep 3600"]
+        volumeMounts:
+        - name: secret-vol
+          mountPath: /etc/missing-secret
+      volumes:
+      - name: secret-vol
+        secret:
+          secretName: secret-volume-that-does-not-exist

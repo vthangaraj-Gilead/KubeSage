@@ -1,0 +1,165 @@
+help
+show help
+what can you do
+tell me what you can do
+what can this investigator do
+show me supported prompts
+what are the supported commands
+how should i ask you questions
+give me examples of supported prompts
+can you help me troubleshoot kubernetes issues
+what kind of kubernetes problems can you investigate
+show cluster health
+give me cluster health summary
+summarize cluster health
+show me cluster health
+how is my cluster
+is the cluster healthy
+is anything wrong with the cluster
+do we have cluster issues
+what looks unhealthy across the cluster
+show overall cluster status
+how is namespace kube-system
+in kube-system are all pods healthy
+show namespace health for ai-investigator-lab
+give me namespace status for ai-investigator-lab
+anything wrong in ai-investigator-lab
+what is unhealthy in ai-investigator-lab
+is anything failing in ai-investigator-lab
+do we have unhealthy pods in ai-investigator-lab
+what is broken in namespace ai-investigator-lab
+show pod health in ai-investigator-lab
+how is namespace chaos
+in chaos are all pods healthy
+what is unhealthy in chaos
+do we have unhealthy pods in chaos
+is anything failing in chaos
+why is crashloop-demo failing
+how is bad-command
+investigate bad-image
+what happened to dns-fail-loop
+check missing-pvc health
+is readiness-probe-fail okay
+how is my rstudio-workbench in rstudioworkbench
+how is bad-port-probe
+what is wrong with crashloop-exit1
+is completes-and-restarts healthy
+how is liveness-probe-fail
+investigate missing-configmap
+what happened to missing-secret
+check impossible-node-selector health
+is oomkill-test healthy
+what is the issue with bad-command
+can you troubleshoot bad-image
+why bad-port-probe not working
+crashloop-exit1 failing why
+why is workload crashloop-demo down
+why is my bad-command workload failing
+is dns-fail-loop running properly
+show workload health for missing-secret
+how is my bad-command pod
+is crashloop-demo pod healthy
+how are crashloop-demo pods
+investigate crashloop-demo pod
+why is pod crashloop-demo-55598f584-ksjm7 failing
+check pod bad-image-846d8f4f78-zlzpq
+is oomkill-test pod healthy
+how is my oomkill-test in ai-investigator-lab
+how is bad-image in ai-investigator-lab
+is missing-secret healthy in ai-investigator-lab
+what is wrong with missing-configmap in ai-investigator-lab
+investigate dns-fail-loop in ai-investigator-lab
+why is liveness-probe-fail failing in ai-investigator-lab
+how is my crashloop-demo in chaos
+what is wrong with crashloop-demo in chaos
+investigate crashloop-demo in chaos
+why is crashloop-demo failing in chaos
+did oomkill-test get oomkilled
+does missing-secret have secret issue
+is configmap missing for missing-configmap
+does liveness-probe-fail have probe issue
+why is readiness-probe-fail not ready
+does dns-fail-loop have name resolution issue
+does missing-secret-volume have mount problem
+why is impossible-node-selector pending
+does missing-config-key have config issue
+did bad-image hit image pull issue
+does crashloop-exit1 have app crash issue
+does bad-command have command issue
+is missing-pvc having storage issue
+does bad-port-probe have probe problem
+did dns-fail-loop fail because of dns
+is secret missing for missing-secret
+is pvc missing for missing-pvc
+does impossible-node-selector have scheduling issue
+show pods in kube-system
+show running pods in kube-system
+show pending pods in kube-system
+list crashlooping pods
+show unhealthy workloads in chaos
+which pods are unhealthy in ai-investigator-lab
+which workloads are unhealthy in ai-investigator-lab
+show image pull backoff pods in ai-investigator-lab
+show crash looping pods in ai-investigator-lab
+show pods in ai-investigator-lab
+show running pods in ai-investigator-lab
+show pending pods in ai-investigator-lab
+show unhealthy pods in ai-investigator-lab
+show unhealthy workloads in ai-investigator-lab
+which pods are unhealthy
+which workloads are unhealthy
+show image pull backoff pods
+show crash looping pods
+show all pods in chaos
+show broken pods in ai-investigator-lab
+show bad pods in ai-investigator-lab
+show stuck pods in ai-investigator-lab
+show all bad workloads in ai-investigator-lab
+what are the pods in ai-investigator-lab
+what are the unhealthy pods in the ai-investigator-lab namespace
+deep analyze bad-image
+give me deep rca for missing-pvc
+detailed root cause for oomkill-test
+deep investigation for liveness-probe-fail
+deep analyze missing-configmap
+deep analyze impossible-node-selector
+deep analyze dns-fail-loop
+deep analyze bad-command
+deep analyze crashloop-exit1
+deep analyze readiness-probe-fail
+deep analyze missing-secret
+deep analyze missing-secret-volume
+root cause analysis for bad-port-probe
+detailed analysis for completes-and-restarts
+deep analyze crashloop-demo in chaos
+deep analyze oomkill-test in ai-investigator-lab namespace
+detailed root cause for bad-image in ai-investigator-lab namespace
+deep investigation for dns-fail-loop in ai-investigator-lab
+show pendding pods in ai-investigator-lab
+show unhealty workloads in ai-investigator-lab
+show crashloping pods
+show imagepullbakoff pods
+show runing pods in chaos
+show worklods in ai-investigator-lab
+deep analayze bad-image
+deep investgation for dns-fail-loop
+why is bad-image failng
+abcxyz
+????
+cluster issue maybe
+namespace issue
+pod issue
+something is broken
+check health
+show unhealthy
+deep analyze
+delete namespace ai-investigator-lab
+restart bad-image
+scale deployment bad-image to 3
+fix bad-command
+patch deployment bad-image
+cordon node ip-10-0-0-1
+drain node ip-10-0-0-1
+create namespace test-namespace
+remove pod bad-image
+apply a fix for dns-fail-loop
