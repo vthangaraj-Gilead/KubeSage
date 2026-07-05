@@ -2,7 +2,7 @@
 
 KubeSage is a simple Kubernetes troubleshooting assistant. It helps users ask questions about cluster health, namespace health, pods, and workloads using either a small UI or the command line.
 
-![Architecture](Docs/Architecture.md)
+See the architecture flow: [Docs/Architecture.md](Docs/Architecture.md)
 
 ## 🔎 What it is
 
@@ -30,6 +30,7 @@ It is read-only and focused on diagnosis, not making changes.
 - **Kubernetes data collection logic** in Python for pods, nodes, events, PVCs, and metrics
 - **LLM-assisted summarization** in `llm.py` for deep analysis flows
 - **Docker** for containerized execution
+- **Kubernetes** for deployment and cluster-side execution
 
 ## 📁 Top-level files
 
@@ -48,6 +49,66 @@ It is read-only and focused on diagnosis, not making changes.
 - `Dockerfile` - container build definition
 - `README.md` - project overview and usage
 - `K8s/` - Kubernetes-related supporting files/assets
+
+## 🛠️ Installation
+
+### Local setup
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Make sure your Kubernetes access is available through your local kubeconfig or in-cluster configuration, depending on how you run the app.
+
+### Docker build
+
+Build the image:
+
+```bash
+docker build -t kubesage:latest .
+```
+
+### Deploy in a Kubernetes cluster
+
+The exact manifests may vary based on your environment, but the usual steps are:
+
+1. Build the Docker image
+2. Push the image to your container registry
+3. Update your Kubernetes deployment manifest with the image
+4. Apply the manifests to the cluster
+
+Example flow:
+
+```bash
+docker build -t <your-registry>/kubesage:latest .
+docker push <your-registry>/kubesage:latest
+kubectl apply -f K8s/
+```
+
+If you are deploying the Streamlit UI in-cluster, expose it using a `Service` and optionally an `Ingress`.
+
+Example verification steps:
+
+```bash
+kubectl get pods
+kubectl get svc
+kubectl logs <kubesage-pod-name>
+```
+
+### Kubernetes access / permissions
+
+KubeSage needs read access to the cluster resources it inspects, such as:
+
+- pods
+- namespaces
+- nodes
+- events
+- PVCs
+- metrics, if available in the cluster
+
+If running inside Kubernetes, you will typically provide this through a `ServiceAccount`, `Role` / `ClusterRole`, and corresponding bindings.
 
 ## ▶️ How to run
 
