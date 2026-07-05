@@ -179,6 +179,11 @@ def get_pvc(namespace: str) -> Dict[str, Any]:
     return _run_kubectl_json(command, namespace)
 
 
+def get_cluster_pvcs() -> Dict[str, Any]:
+    command = "kubectl get pvc -A -o json"
+    return _run_kubectl_json(command)
+
+
 def get_nodes() -> Dict[str, Any]:
     command = "kubectl get nodes -o json"
     return _run_kubectl_json(command)
@@ -186,6 +191,11 @@ def get_nodes() -> Dict[str, Any]:
 
 def get_cluster_pods() -> Dict[str, Any]:
     command = "kubectl get pods -A -o json"
+    return _run_kubectl_json(command)
+
+
+def get_cluster_events() -> Dict[str, Any]:
+    command = "kubectl get events -A -o json"
     return _run_kubectl_json(command)
 
 

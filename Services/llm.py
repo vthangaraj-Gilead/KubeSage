@@ -240,3 +240,173 @@ Investigation data:
     }
 
     return json.dumps(normalized)
+
+
+def analyze_namespace_health(analysis_data: Dict[str, Any]) -> str:
+    payload_data = {
+        "scope": "namespace",
+        "namespace": analysis_data.get("namespace", ""),
+        "health_score": analysis_data.get("health_score", 0),
+        "summary": _truncate_text(analysis_data.get("summary", ""), 2000),
+        "evidence": _truncate_text(analysis_data.get("evidence", ""), 4000),
+        "issue_groups": analysis_data.get("issue_groups", []),
+    }
+
+    prompt = f"""
+You are a Kubernetes namespace health analysis assistant.
+
+You will be given summarized evidence for one namespace.
+
+Target namespace:
+- namespace: {payload_data["namespace"]}
+
+Your task:
+1. Summarize the namespace health at a namespace-wide level.
+2. Identify the major failure patterns affecting the namespace, if any.
+3. Summarize the strongest evidence from the namespace only.
+4. Assign confidence as exactly one of: High, Medium, Low.
+5. Provide actionable recommendations for this namespace.
+
+Strict scope rules:
+- Focus on namespace-wide synthesis, not a single pod RCA.
+- Do not collapse the entire namespace into one pod-specific root cause.
+- If multiple issue types exist, mention that the namespace has multiple failure patterns.
+- If the namespace is healthy, say that clearly and provide short deep-analysis guidance.
+
+Strict output rules:
+- Return JSON only.
+- Do not include markdown.
+- Do not include explanations outside JSON.
+- Do not include a root_cause field.
+- Do not include a category field.
+- confidence must be exactly one of: "High", "Medium", "Low"
+- recommendations must be a JSON array of strings
+- summary must be a short string
+- evidence must be a short string summary
+- evidence_points must be a JSON array of 1 to 5 short strings when possible
+- Do not invent facts not present in the provided data.
+- Recommendations should prioritize the main failure patterns if unhealthy.
+- If healthy, recommendations should reflect that deep analysis found no namespace-wide unhealthy pattern.
+
+Required JSON format:
+{{
+  "summary": "string",
+  "evidence": "string",
+  "evidence_points": ["string", "string"],
+  "confidence": "High|Medium|Low",
+  "recommendations": ["string", "string"]
+}}
+
+Namespace analysis data:
+{json.dumps(payload_data, indent=2)}
+""".strip()
+
+    content = _call_ollama(prompt)
+
+    try:
+        parsed = _extract_json(content)
+    except Exception:
+        parsed = {
+            "summary": payload_data["summary"],
+            "evidence": "",
+            "evidence_points": [],
+            "confidence": "Medium",
+            "recommendations": [],
+        }
+
+    normalized = {
+        "summary": str(parsed.get("summary", "")).strip(),
+        "evidence": str(parsed.get("evidence", "")).strip(),
+        "evidence_points": _normalize_evidence_points(parsed.get("evidence_points", [])),
+        "confidence": str(parsed.get("confidence", "Medium")).strip(),
+        "recommendations": _normalize_recommendations(parsed.get("recommendations", [])),
+    }
+
+    if normalized["confidence"] not in {"High", "Medium", "Low"}:
+        normalized["confidence"] = "Medium"
+
+    return json.dumps(normalized)
+
+
+def analyze_cluster_health(analysis_data: Dict[str, Any]) -> str:
+    payload_data = {
+        "scope": "cluster",
+        "health_score": analysis_data.get("health_score", 0),
+        "summary": _truncate_text(analysis_data.get("summary", ""), 2000),
+        "evidence": _truncate_text(analysis_data.get("evidence", ""), 5000),
+        "issue_groups": analysis_data.get("issue_groups", []),
+        "affected_namespaces": analysis_data.get("affected_namespaces", []),
+    }
+
+    prompt = f"""
+You are a Kubernetes cluster health analysis assistant.
+
+You will be given summarized evidence for overall cluster health.
+
+Your task:
+1. Summarize the cluster health at a cluster-wide level.
+2. Identify the major failure patterns affecting the cluster, if any.
+3. Summarize the strongest supporting evidence across the cluster.
+4. Assign confidence as exactly one of: High, Medium, Low.
+5. Provide actionable recommendations for this cluster.
+
+Strict scope rules:
+- Focus on cluster-wide synthesis, not a single pod RCA.
+- Do not collapse the cluster into one pod-specific root cause.
+- If multiple issue types exist, explicitly describe the cluster as having multiple failure patterns.
+- If the cluster is healthy, say that clearly and provide short deep-analysis guidance.
+- Prefer grouped reasoning, such as failure categories and affected namespaces.
+
+Strict output rules:
+- Return JSON only.
+- Do not include markdown.
+- Do not include explanations outside JSON.
+- Do not include a root_cause field.
+- Do not include a category field.
+- confidence must be exactly one of: "High", "Medium", "Low"
+- recommendations must be a JSON array of strings
+- summary must be a short string
+- evidence must be a short string summary
+- evidence_points must be a JSON array of 1 to 6 short strings when possible
+- Do not invent facts not present in the provided data.
+- Recommendations should prioritize the main failure groups and most affected namespaces if unhealthy.
+- If healthy, recommendations should reflect that deep analysis found no major cluster-wide unhealthy pattern.
+
+Required JSON format:
+{{
+  "summary": "string",
+  "evidence": "string",
+  "evidence_points": ["string", "string"],
+  "confidence": "High|Medium|Low",
+  "recommendations": ["string", "string"]
+}}
+
+Cluster analysis data:
+{json.dumps(payload_data, indent=2)}
+""".strip()
+
+    content = _call_ollama(prompt)
+
+    try:
+        parsed = _extract_json(content)
+    except Exception:
+        parsed = {
+            "summary": payload_data["summary"],
+            "evidence": "",
+            "evidence_points": [],
+            "confidence": "Medium",
+            "recommendations": [],
+        }
+
+    normalized = {
+        "summary": str(parsed.get("summary", "")).strip(),
+        "evidence": str(parsed.get("evidence", "")).strip(),
+        "evidence_points": _normalize_evidence_points(parsed.get("evidence_points", [])),
+        "confidence": str(parsed.get("confidence", "Medium")).strip(),
+        "recommendations": _normalize_recommendations(parsed.get("recommendations", [])),
+    }
+
+    if normalized["confidence"] not in {"High", "Medium", "Low"}:
+        normalized["confidence"] = "Medium"
+
+    return json.dumps(normalized)

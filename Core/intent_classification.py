@@ -8,6 +8,8 @@ SUPPORTED_INTENTS = [
     "NamespaceHealth",
     "PodInvestigation",
     "DeepPodInvestigation",
+    "DeepClusterHealth",
+    "DeepNamespaceHealth",
     "Help",
     "ResourceListing",
     "UnsupportedAction",
@@ -38,6 +40,8 @@ HELP_KEYWORDS = [
     "capabilities",
     "examples",
     "commands",
+    "what can kubesage do",
+    "how can you help",
 ]
 
 DEEP_KEYWORDS = [
@@ -67,18 +71,29 @@ LISTING_RESOURCE_KEYWORDS = {
 }
 
 LISTING_STATUS_KEYWORDS = {
+    "not running": "Unhealthy",
+    "non running": "Unhealthy",
+    "non healthy": "Unhealthy",
+    "not healthy": "Unhealthy",
+    "no healthy": "Unhealthy",
+    "unhealthy": "Unhealthy",
+    "problematic pods": "Unhealthy",
+    "problematic workloads": "Unhealthy",
+    "problematic": "Unhealthy",
+    "broken": "Unhealthy",
+    "bad": "Unhealthy",
+    "stuck": "Unhealthy",
+    "failing": "Unhealthy",
+    "failed": "Unhealthy",
+    "healthy": "Healthy",
     "running": "Running",
     "pending": "Pending",
-    "unhealthy": "Unhealthy",
     "crashloopbackoff": "CrashLoopBackOff",
     "crashlooping": "CrashLoopBackOff",
     "crash looping": "CrashLoopBackOff",
     "imagepullbackoff": "ImagePullBackOff",
     "image pull backoff": "ImagePullBackOff",
     "image pull": "ImagePullBackOff",
-    "broken": "Unhealthy",
-    "bad": "Unhealthy",
-    "stuck": "Unhealthy",
 }
 
 CAUSE_PATTERNS = [
@@ -97,6 +112,8 @@ CAUSE_PATTERNS = [
     r"\bcommand issue\b",
     r"\bscheduling issue\b",
     r"\bapp crash\b",
+    r"\bcrashloop\b",
+    r"\bcrash loop\b",
 ]
 
 TYPO_CORRECTIONS = {
@@ -107,8 +124,11 @@ TYPO_CORRECTIONS = {
     "runing": "running",
     "worklods": "workloads",
     "analayze": "analyze",
+    "analyse": "analyze",
     "investgation": "investigation",
     "failng": "failing",
+    "problamatic": "problematic",
+    "problemetic": "problematic",
 }
 
 GENERIC_NON_NAMESPACE_WORDS = {
@@ -121,6 +141,16 @@ GENERIC_NON_NAMESPACE_WORDS = {
     "broken",
     "failure",
     "failures",
+}
+
+RESERVED_NON_WORKLOAD_NAMES = {
+    "cluster",
+    "namespace",
+    "namespaces",
+    "health",
+    "status",
+    "my",
+    "on",
 }
 
 
@@ -147,7 +177,8 @@ def _find_namespace(question_lower: str) -> str:
     patterns = [
         r"\bnamespace\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\b",
         r"\bin\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
-        r"\bin\s+(kube-system|kube-public|kube-node-lease|default|ai-investigator-lab|chaos|rstudioworkbench)\b",
+        r"\bon\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bin\s+(kube-system|kube-public|kube-node-lease|default|ai-investigator-lab|chaos|rstudioworkbench|kubesage)\b",
     ]
 
     for pattern in patterns:
@@ -157,6 +188,37 @@ def _find_namespace(question_lower: str) -> str:
             if candidate in GENERIC_NON_NAMESPACE_WORDS:
                 continue
             return candidate
+
+    return ""
+
+
+def _extract_explicit_namespace_name(question_lower: str) -> str:
+    patterns = [
+        r"\bdeep analyze\s+on\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bdeep analyze\s+my\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bdeep analyze\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bdeep analyze\s+namespace\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\b",
+        r"\bdeep analysis for\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bdeep investigation for\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bperform rca on\s+my\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bperform rca on\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bdo rca on\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\brun rca on\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bperform root cause analysis on\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bhow is\s+my\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bhow is\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bcheck\s+my\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bcheck\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\s+namespace\b",
+        r"\bshow namespace health for\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\b",
+        r"\bgive me namespace status for\s+([a-z0-9]([-a-z0-9]*[a-z0-9])?)\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, question_lower)
+        if match:
+            candidate = match.group(1)
+            if candidate not in RESERVED_NON_WORKLOAD_NAMES:
+                return candidate
 
     return ""
 
@@ -182,18 +244,23 @@ def _extract_resource_name(question_lower: str) -> str:
     for pattern in deep_patterns:
         match = re.search(pattern, question_lower)
         if match:
-            return match.group(1)
+            candidate = match.group(1)
+            if candidate not in RESERVED_NON_WORKLOAD_NAMES:
+                return candidate
 
     explicit_patterns = [
+        r"\binvestigate\s+([a-z0-9][a-z0-9\-]*)\b",
+        r"\binspect\s+([a-z0-9][a-z0-9\-]*)\b",
+        r"\bcheck\s+([a-z0-9][a-z0-9\-]*)\b",
+        r"\banalyze\s+([a-z0-9][a-z0-9\-]*)\b",
         r"\bfor\s+([a-z0-9][a-z0-9\-]*)\b",
         r"\bwhy is\s+([a-z0-9][a-z0-9\-]*)\b",
         r"\bhow is\s+(?:my\s+)?([a-z0-9][a-z0-9\-]*)\b",
-        r"\binvestigate\s+([a-z0-9][a-z0-9\-]*)\b",
-        r"\bcheck\s+([a-z0-9][a-z0-9\-]*)\b",
         r"\bwhat happened to\s+([a-z0-9][a-z0-9\-]*)\b",
         r"\bwhat is wrong with\s+([a-z0-9][a-z0-9\-]*)\b",
         r"\bdoes\s+([a-z0-9][a-z0-9\-]*)\b",
         r"\bdid\s+([a-z0-9][a-z0-9\-]*)\b",
+        r"\bhas\s+([a-z0-9][a-z0-9\-]*)\b",
         r"\bis\s+([a-z0-9][a-z0-9\-]*)\b",
         r"\bworkload\s+([a-z0-9][a-z0-9\-]*)\b",
         r"\bpod\s+([a-z0-9][a-z0-9\-]*)\b",
@@ -215,7 +282,7 @@ def _extract_resource_name(question_lower: str) -> str:
                 "issue",
                 "analysis",
                 "investigation",
-            }:
+            } and candidate not in RESERVED_NON_WORKLOAD_NAMES:
                 return candidate
 
     trailing_patterns = [
@@ -229,7 +296,9 @@ def _extract_resource_name(question_lower: str) -> str:
     for pattern in trailing_patterns:
         match = re.search(pattern, question_lower)
         if match:
-            return match.group(1)
+            candidate = match.group(1)
+            if candidate not in RESERVED_NON_WORKLOAD_NAMES:
+                return candidate
 
     return ""
 
@@ -298,8 +367,40 @@ def _is_cluster_health(question_lower: str) -> bool:
         r"\bcluster issues\b",
         r"\bacross the cluster\b",
         r"\bcluster issue\b",
+        r"\banalyze my cluster\b",
+        r"\banalyze cluster\b",
+        r"\binspect my cluster\b",
+        r"\bcheck my cluster\b",
+        r"\bcheck cluster\b",
+        r"\breview cluster health\b",
+        r"\bgive me cluster summary\b",
+        r"\btell me cluster health\b",
     ]
     return any(re.search(pattern, question_lower) for pattern in cluster_patterns)
+
+
+def _is_explicit_cluster_deep_prompt(question_lower: str) -> bool:
+    patterns = [
+        r"\bdeep analyze my cluster\b",
+        r"\bdeep analyze cluster\b",
+        r"\bdeep analysis for cluster\b",
+        r"\bdeep analysis for my cluster\b",
+        r"\bdeep investigation for cluster\b",
+        r"\bdeep investigation for my cluster\b",
+        r"\bperform rca on cluster\b",
+        r"\bperform rca on my cluster\b",
+        r"\bdo rca on cluster\b",
+        r"\bdo rca on my cluster\b",
+        r"\brun rca on cluster\b",
+        r"\brun rca on my cluster\b",
+        r"\bperform root cause analysis on cluster\b",
+        r"\bperform root cause analysis on my cluster\b",
+        r"\bdo root cause analysis on cluster\b",
+        r"\bdo root cause analysis on my cluster\b",
+        r"\brun root cause analysis on cluster\b",
+        r"\brun root cause analysis on my cluster\b",
+    ]
+    return any(re.search(pattern, question_lower) for pattern in patterns)
 
 
 def _is_namespace_health(question_lower: str, namespace: str) -> bool:
@@ -307,30 +408,43 @@ def _is_namespace_health(question_lower: str, namespace: str) -> bool:
         return False
 
     namespace_patterns = [
-        r"\bnamespace\b",
+        r"\bnamespace health\b",
+        r"\bnamespace status\b",
+        r"\bhow is namespace\b",
+        r"\bis namespace .* healthy\b",
+        r"\banalyze namespace\b",
+        r"\binspect namespace\b",
+        r"\breview namespace\b",
+        r"\bwhat is unhealthy in\b",
+        r"\bunhealthy pods in\b",
         r"\ball pods healthy\b",
         r"\banything wrong\b",
-        r"\bwhat is unhealthy\b",
         r"\bis anything failing\b",
-        r"\bunhealthy pods\b",
-        r"\bnamespace status\b",
-        r"\bnamespace health\b",
-        r"\bpod health\b",
         r"\bwhat is broken\b",
+        r"\bhow is [a-z0-9][a-z0-9\-]* namespace\b",
+        r"\bcheck [a-z0-9][a-z0-9\-]* namespace\b",
+        r"\bcheck my [a-z0-9][a-z0-9\-]* namespace\b",
     ]
     return any(re.search(pattern, question_lower) for pattern in namespace_patterns)
 
 
 def _is_resource_listing(question_lower: str) -> bool:
-    listing_verbs = ["show", "list", "which", "what are"]
+    listing_verbs = ["show", "list", "which", "what are", "display"]
     listing_targets = [
         "pods",
         "pod",
         "workloads",
         "workload",
+        "healthy",
         "running",
         "pending",
         "unhealthy",
+        "problematic",
+        "non running",
+        "not running",
+        "not healthy",
+        "non healthy"
+        "no healthy",
         "crashlooping",
         "crash looping",
         "image pull backoff",
@@ -338,6 +452,8 @@ def _is_resource_listing(question_lower: str) -> bool:
         "broken",
         "bad",
         "stuck",
+        "failing",
+        "failed",
     ]
 
     return any(verb in question_lower for verb in listing_verbs) and any(
@@ -350,9 +466,12 @@ def _is_pod_investigation(question_lower: str) -> bool:
         r"\bwhy is\b",
         r"\bhow is\b",
         r"\binvestigate\b",
-        r"\bwhat happened to\b",
+        r"\binspect\b",
         r"\bcheck\b",
+        r"\banalyze\b",
         r"\btroubleshoot\b",
+        r"\bdebug\b",
+        r"\bwhat happened to\b",
         r"\bwhat is wrong with\b",
         r"\bfailing\b",
         r"\bnot working\b",
@@ -426,7 +545,20 @@ def _detect_typo_hint(question_lower: str) -> Optional[str]:
         list(TYPO_CORRECTIONS.values())
         + list(LISTING_RESOURCE_KEYWORDS.keys())
         + list(LISTING_STATUS_KEYWORDS.keys())
-        + ["running", "pending", "unhealthy", "workloads", "pods", "analyze", "investigation", "failing"]
+        + [
+            "healthy",
+            "running",
+            "pending",
+            "unhealthy",
+            "problematic",
+            "workloads",
+            "pods",
+            "analyze",
+            "investigation",
+            "failing",
+            "cluster",
+            "namespace",
+        ]
     )
 
     for word in words:
@@ -464,6 +596,9 @@ def _classify_with_rules(question: str) -> Dict[str, Any]:
         return _supported_response("UnsupportedAction", confidence=0.99)
 
     namespace = _find_namespace(normalized)
+    resource_name = _extract_resource_name(normalized)
+    is_deep = _is_deep_request(normalized)
+    explicit_namespace_name = _extract_explicit_namespace_name(normalized)
 
     if _is_resource_listing(normalized):
         resource_type, status_filter = _extract_listing_type(normalized)
@@ -479,20 +614,41 @@ def _classify_with_rules(question: str) -> Dict[str, Any]:
             confidence=0.97,
         )
 
-    if _is_cluster_health(normalized):
-        return _supported_response("ClusterHealth", resource_type="Cluster", confidence=0.97)
+    if _is_explicit_cluster_deep_prompt(normalized):
+        return _supported_response("DeepClusterHealth", resource_type="Cluster", confidence=0.98)
 
-    if _is_namespace_health(normalized, namespace):
+    if explicit_namespace_name and is_deep:
+        return _supported_response(
+            "DeepNamespaceHealth",
+            resource_type="Namespace",
+            resource_name=explicit_namespace_name,
+            namespace=explicit_namespace_name,
+            confidence=0.98,
+        )
+
+    if explicit_namespace_name:
         return _supported_response(
             "NamespaceHealth",
             resource_type="Namespace",
-            resource_name=namespace,
-            namespace=namespace,
-            confidence=0.97,
+            resource_name=explicit_namespace_name,
+            namespace=explicit_namespace_name,
+            confidence=0.98,
         )
 
-    if _is_deep_request(normalized):
-        resource_name = _extract_resource_name(normalized)
+    if _is_cluster_health(normalized):
+        if is_deep:
+            return _supported_response("DeepClusterHealth", resource_type="Cluster", confidence=0.97)
+        return _supported_response("ClusterHealth", resource_type="Cluster", confidence=0.97)
+
+    if is_deep:
+        if namespace and _is_namespace_health(normalized, namespace):
+            return _supported_response(
+                "DeepNamespaceHealth",
+                resource_type="Namespace",
+                resource_name=namespace,
+                namespace=namespace,
+                confidence=0.96,
+            )
         if resource_name:
             return _supported_response(
                 "DeepPodInvestigation",
@@ -505,8 +661,16 @@ def _classify_with_rules(question: str) -> Dict[str, Any]:
             return _ambiguous_response(f"Intent is unclear. Did you mean '{typo_hint}'?")
         return _ambiguous_response("Unable to classify intent")
 
+    if _is_namespace_health(normalized, namespace):
+        return _supported_response(
+            "NamespaceHealth",
+            resource_type="Namespace",
+            resource_name=namespace,
+            namespace=namespace,
+            confidence=0.97,
+        )
+
     if _is_pod_investigation(normalized):
-        resource_name = _extract_resource_name(normalized)
         if resource_name:
             return _supported_response(
                 "PodInvestigation",

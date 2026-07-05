@@ -1,7 +1,7 @@
 import json
 import sys
 
-from controller import process_question
+from Core.controller import process_question
 from response_formatter import format_response
 
 

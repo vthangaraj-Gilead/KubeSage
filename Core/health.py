@@ -1,12 +1,60 @@
 from typing import Any, Dict, List
 
 
+HEALTHY_POD_PHASES = {"Running", "Succeeded", "Completed"}
+UNHEALTHY_WAITING_REASONS = {
+    "CrashLoopBackOff",
+    "ImagePullBackOff",
+    "ErrImagePull",
+    "CreateContainerError",
+    "CreateContainerConfigError",
+}
+UNHEALTHY_TERMINATION_REASONS = {
+    "Error",
+    "OOMKilled",
+    "Evicted",
+}
+
+
 def _get_ready_condition(status: Dict[str, Any]) -> str:
     conditions = status.get("conditions", []) or []
     for condition in conditions:
         if condition.get("type") == "Ready":
             return str(condition.get("status", "Unknown"))
     return "Unknown"
+
+
+def _is_completed_successfully(status: Dict[str, Any]) -> bool:
+    phase = str(status.get("phase", "Unknown"))
+    container_statuses = status.get("containerStatuses", []) or []
+
+    if phase == "Succeeded":
+        return True
+
+    if not container_statuses:
+        return False
+
+    all_terminated_successfully = True
+
+    for container in container_statuses:
+        state = container.get("state", {}) or {}
+        waiting = state.get("waiting")
+        terminated = state.get("terminated")
+
+        if waiting is not None:
+            return False
+
+        if not terminated:
+            all_terminated_successfully = False
+            continue
+
+        exit_code = int(terminated.get("exitCode", 1) or 1)
+        reason = str(terminated.get("reason", "") or "")
+
+        if exit_code != 0 and reason not in {"Completed"}:
+            return False
+
+    return all_terminated_successfully
 
 
 def check_pod_health(pod: Dict[str, Any]) -> Dict[str, Any]:
@@ -19,9 +67,18 @@ def check_pod_health(pod: Dict[str, Any]) -> Dict[str, Any]:
     phase = status.get("phase", "Unknown")
     ready_condition = _get_ready_condition(status)
 
+    if _is_completed_successfully(status):
+        return {
+            "healthy": True,
+            "pod_name": pod_name,
+            "namespace": namespace,
+            "phase": phase,
+            "issues": [],
+        }
+
     issues: List[str] = []
 
-    if phase not in {"Running", "Succeeded"}:
+    if phase not in HEALTHY_POD_PHASES:
         issues.append(f"Pod phase is {phase}")
 
     if phase == "Running" and ready_condition == "False":
@@ -38,37 +95,38 @@ def check_pod_health(pod: Dict[str, Any]) -> Dict[str, Any]:
         name = container.get("name", "container")
 
         if waiting:
-            reason = waiting.get("reason", "Unknown")
+            reason = str(waiting.get("reason", "Unknown"))
             if reason not in {"ContainerCreating", "PodInitializing"}:
                 issues.append(f"Container waiting: {reason}")
 
         if terminated:
-            reason = terminated.get("reason", "Unknown")
-            exit_code = terminated.get("exitCode", 0)
-            if exit_code != 0:
+            reason = str(terminated.get("reason", "Unknown"))
+            exit_code = int(terminated.get("exitCode", 0) or 0)
+
+            if exit_code != 0 or reason in UNHEALTHY_TERMINATION_REASONS:
                 issues.append(f"Container terminated: {reason} (exitCode={exit_code})")
-            elif restart_count > 0:
+            elif restart_count > 0 and phase != "Succeeded":
                 issues.append(f"Container restarted after exitCode=0 ({name})")
 
         if last_terminated:
-            last_reason = last_terminated.get("reason", "Unknown")
-            last_exit_code = last_terminated.get("exitCode", 0)
+            last_reason = str(last_terminated.get("reason", "Unknown"))
+            last_exit_code = int(last_terminated.get("exitCode", 0) or 0)
 
             currently_unhealthy = (
-                phase not in {"Running", "Succeeded"}
+                phase not in HEALTHY_POD_PHASES
                 or ready_condition == "False"
                 or waiting is not None
                 or terminated is not None
-                or not ready
+                or (phase == "Running" and not ready)
             )
 
-            if str(last_reason).lower() == "oomkilled" and currently_unhealthy:
+            if last_reason.lower() == "oomkilled" and currently_unhealthy:
                 issues.append("Container terminated: OOMKilled")
 
             if restart_count > 0 and last_exit_code != 0 and currently_unhealthy:
                 issues.append(f"Container last terminated: {last_reason} (exitCode={last_exit_code})")
 
-            if restart_count > 0 and last_exit_code == 0 and not ready:
+            if restart_count > 0 and last_exit_code == 0 and not ready and phase == "Running":
                 issues.append(f"Container repeatedly restarting after exitCode=0 ({name})")
 
         if restart_count > 0 and not ready and not waiting and not terminated and phase == "Running":
@@ -127,9 +185,76 @@ def check_namespace_health(pods: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _classify_pod_issue(pod_issues: List[str]) -> Dict[str, Any]:
+    dominant_status = None
+    dominant_penalty = 0
+    dominant_severity = "warning"
+
+    for issue_text in pod_issues:
+        normalized = issue_text.lower()
+
+        if "crashloopbackoff" in normalized:
+            dominant_status = "CrashLoopBackOff"
+            dominant_penalty = 15
+            dominant_severity = "critical"
+            break
+        elif "imagepullbackoff" in normalized:
+            if dominant_penalty < 15:
+                dominant_status = "ImagePullBackOff"
+                dominant_penalty = 15
+                dominant_severity = "critical"
+        elif "errimagepull" in normalized:
+            if dominant_penalty < 15:
+                dominant_status = "ErrImagePull"
+                dominant_penalty = 15
+                dominant_severity = "critical"
+        elif "createcontainererror" in normalized or "createcontainerconfigerror" in normalized:
+            if dominant_penalty < 15:
+                dominant_status = "CreateContainerError"
+                dominant_penalty = 15
+                dominant_severity = "critical"
+        elif "oomkilled" in normalized:
+            if dominant_penalty < 10:
+                dominant_status = "OOMKilled"
+                dominant_penalty = 10
+                dominant_severity = "warning"
+        elif "pod phase is pending" in normalized:
+            if dominant_penalty < 5:
+                dominant_status = "Pending"
+                dominant_penalty = 5
+                dominant_severity = "warning"
+        elif "evicted" in normalized:
+            if dominant_penalty < 5:
+                dominant_status = "Evicted"
+                dominant_penalty = 5
+                dominant_severity = "warning"
+        elif "terminated: error" in normalized:
+            if dominant_penalty < 5:
+                dominant_status = "Error"
+                dominant_penalty = 5
+                dominant_severity = "warning"
+        elif "running but notready" in normalized or "notready" in normalized:
+            if dominant_penalty < 5:
+                dominant_status = "NotReady"
+                dominant_penalty = 5
+                dominant_severity = "warning"
+
+    if dominant_status is None:
+        dominant_status = pod_issues[0] if pod_issues else "Unhealthy"
+        dominant_penalty = 5
+        dominant_severity = "warning"
+
+    return {
+        "status": dominant_status,
+        "penalty": dominant_penalty,
+        "severity": dominant_severity,
+    }
+
+
 def check_cluster_health(cluster_data: Dict[str, Any]) -> Dict[str, Any]:
     nodes = cluster_data.get("nodes", []) or []
     pods = cluster_data.get("pods", []) or []
+    pvcs = cluster_data.get("pvcs", []) or []
     events = cluster_data.get("events", []) or []
     node_metrics = cluster_data.get("node_metrics", {}) or {}
     pod_metrics = cluster_data.get("pod_metrics", {}) or {}
@@ -183,6 +308,30 @@ def check_cluster_health(cluster_data: Dict[str, Any]) -> Dict[str, Any]:
         else:
             warning_count += 1
 
+    def add_issue_without_penalty(
+        resource_type: str,
+        resource_name: str,
+        status: str,
+        namespace: str = "",
+        severity: str = "warning",
+    ) -> None:
+        nonlocal critical_count, warning_count
+
+        issue: Dict[str, Any] = {
+            "resource_type": resource_type,
+            "resource_name": resource_name,
+            "status": status,
+        }
+        if namespace:
+            issue["namespace"] = namespace
+
+        issues.append(issue)
+
+        if severity == "critical":
+            critical_count += 1
+        else:
+            warning_count += 1
+
     for node in nodes:
         metadata = node.get("metadata", {}) or {}
         status = node.get("status", {}) or {}
@@ -203,40 +352,6 @@ def check_cluster_health(cluster_data: Dict[str, Any]) -> Dict[str, Any]:
                 severity="critical",
             )
 
-        if condition_map.get("MemoryPressure") == "True":
-            add_issue(
-                resource_type="Node",
-                resource_name=node_name,
-                status="MemoryPressure",
-                penalty=15,
-                severity="warning",
-            )
-
-        if condition_map.get("DiskPressure") == "True":
-            add_issue(
-                resource_type="Node",
-                resource_name=node_name,
-                status="DiskPressure",
-                penalty=15,
-                severity="warning",
-            )
-
-        if condition_map.get("PIDPressure") == "True":
-            add_issue(
-                resource_type="Node",
-                resource_name=node_name,
-                status="PIDPressure",
-                severity="warning",
-            )
-
-        if condition_map.get("NetworkUnavailable") == "True":
-            add_issue(
-                resource_type="Node",
-                resource_name=node_name,
-                status="NetworkUnavailable",
-                severity="warning",
-            )
-
         metric = node_metric_map.get(node_name)
         if metric:
             cpu_percent_value = str(metric.get("cpu_percent", "")).replace("%", "").strip()
@@ -249,6 +364,7 @@ def check_cluster_health(cluster_data: Dict[str, Any]) -> Dict[str, Any]:
                         resource_type="Node",
                         resource_name=node_name,
                         status=f"HighCPU({cpu_percent}%)",
+                        penalty=5,
                         severity="warning",
                     )
             except Exception:
@@ -261,21 +377,45 @@ def check_cluster_health(cluster_data: Dict[str, Any]) -> Dict[str, Any]:
                         resource_type="Node",
                         resource_name=node_name,
                         status=f"HighMemory({memory_percent}%)",
+                        penalty=5,
                         severity="warning",
                     )
             except Exception:
                 pass
 
+    for pvc in pvcs:
+        metadata = pvc.get("metadata", {}) or {}
+        status = pvc.get("status", {}) or {}
+
+        pvc_name = metadata.get("name", "unknown")
+        namespace = metadata.get("namespace", "default")
+        phase = status.get("phase", "Unknown")
+
+        if phase == "Pending":
+            add_issue(
+                resource_type="PVC",
+                resource_name=pvc_name,
+                namespace=namespace,
+                status="Pending",
+                penalty=5,
+                severity="warning",
+            )
+
+    total_pods = len(pods)
+    unhealthy_pod_count = 0
+    raw_pod_penalty = 0
+
     for pod in pods:
         pod_health = check_pod_health(pod)
 
+        metadata = pod.get("metadata", {}) or {}
+        pod_name = metadata.get("name", "unknown")
+        namespace = metadata.get("namespace", "default")
+
         if pod_health.get("healthy", False):
-            metadata = pod.get("metadata", {}) or {}
-            pod_name = metadata.get("name", "unknown")
-            namespace = metadata.get("namespace", "default")
             pod_metric = pod_metric_map.get(f"{namespace}/{pod_name}")
 
-            if pod_metric:
+            if pod_metric and pod_health.get("phase") == "Running":
                 cpu_value = str(pod_metric.get("cpu", "")).strip().lower()
                 memory_value = str(pod_metric.get("memory", "")).strip().lower()
 
@@ -283,7 +423,7 @@ def check_cluster_health(cluster_data: Dict[str, Any]) -> Dict[str, Any]:
                     if cpu_value.endswith("m"):
                         cpu_millicores = int(cpu_value[:-1])
                         if cpu_millicores > 1000:
-                            add_issue(
+                            add_issue_without_penalty(
                                 resource_type="Pod",
                                 resource_name=pod_name,
                                 namespace=namespace,
@@ -297,7 +437,7 @@ def check_cluster_health(cluster_data: Dict[str, Any]) -> Dict[str, Any]:
                     if memory_value.endswith("mi"):
                         memory_mib = int(memory_value[:-2])
                         if memory_mib > 1024:
-                            add_issue(
+                            add_issue_without_penalty(
                                 resource_type="Pod",
                                 resource_name=pod_name,
                                 namespace=namespace,
@@ -309,139 +449,23 @@ def check_cluster_health(cluster_data: Dict[str, Any]) -> Dict[str, Any]:
 
             continue
 
-        pod_name = pod_health.get("pod_name", "unknown")
-        namespace = pod_health.get("namespace", "default")
+        unhealthy_pod_count += 1
         pod_issues = pod_health.get("issues", []) or []
+        classified = _classify_pod_issue(pod_issues)
 
-        for issue_text in pod_issues:
-            normalized = issue_text.lower()
+        add_issue_without_penalty(
+            resource_type="Pod",
+            resource_name=pod_name,
+            status=classified["status"],
+            namespace=namespace,
+            severity=classified["severity"],
+        )
+        raw_pod_penalty += int(classified["penalty"])
 
-            if "crashloopbackoff" in normalized:
-                add_issue(
-                    resource_type="Pod",
-                    resource_name=pod_name,
-                    status="CrashLoopBackOff",
-                    namespace=namespace,
-                    penalty=15,
-                    severity="critical",
-                )
-            elif "pod phase is pending" in normalized:
-                add_issue(
-                    resource_type="Pod",
-                    resource_name=pod_name,
-                    status="Pending",
-                    namespace=namespace,
-                    penalty=10,
-                    severity="warning",
-                )
-            elif "imagepullbackoff" in normalized:
-                add_issue(
-                    resource_type="Pod",
-                    resource_name=pod_name,
-                    status="ImagePullBackOff",
-                    namespace=namespace,
-                    penalty=10,
-                    severity="warning",
-                )
-            elif "errimagepull" in normalized:
-                add_issue(
-                    resource_type="Pod",
-                    resource_name=pod_name,
-                    status="ErrImagePull",
-                    namespace=namespace,
-                    severity="warning",
-                )
-            elif "oomkilled" in normalized:
-                add_issue(
-                    resource_type="Pod",
-                    resource_name=pod_name,
-                    status="OOMKilled",
-                    namespace=namespace,
-                    penalty=10,
-                    severity="warning",
-                )
-            elif "evicted" in normalized:
-                add_issue(
-                    resource_type="Pod",
-                    resource_name=pod_name,
-                    status="Evicted",
-                    namespace=namespace,
-                    severity="warning",
-                )
-            elif "createcontainererror" in normalized:
-                add_issue(
-                    resource_type="Pod",
-                    resource_name=pod_name,
-                    status="CreateContainerError",
-                    namespace=namespace,
-                    severity="warning",
-                )
-            elif "createcontainerconfigerror" in normalized:
-                add_issue(
-                    resource_type="Pod",
-                    resource_name=pod_name,
-                    status="CreateContainerConfigError",
-                    namespace=namespace,
-                    severity="warning",
-                )
-            elif "terminated: error" in normalized:
-                add_issue(
-                    resource_type="Pod",
-                    resource_name=pod_name,
-                    status="Error",
-                    namespace=namespace,
-                    severity="warning",
-                )
-            elif "running but notready" in normalized or "notready" in normalized:
-                add_issue(
-                    resource_type="Pod",
-                    resource_name=pod_name,
-                    status="NotReady",
-                    namespace=namespace,
-                    penalty=10,
-                    severity="warning",
-                )
-            else:
-                add_issue(
-                    resource_type="Pod",
-                    resource_name=pod_name,
-                    status=issue_text,
-                    namespace=namespace,
-                    severity="warning",
-                )
-
-        pod_metric = pod_metric_map.get(f"{namespace}/{pod_name}")
-        if pod_metric:
-            cpu_value = str(pod_metric.get("cpu", "")).strip().lower()
-            memory_value = str(pod_metric.get("memory", "")).strip().lower()
-
-            try:
-                if cpu_value.endswith("m"):
-                    cpu_millicores = int(cpu_value[:-1])
-                    if cpu_millicores > 1000:
-                        add_issue(
-                            resource_type="Pod",
-                            resource_name=pod_name,
-                            namespace=namespace,
-                            status=f"HighCPU({cpu_value})",
-                            severity="warning",
-                        )
-            except Exception:
-                pass
-
-            try:
-                if memory_value.endswith("mi"):
-                    memory_mib = int(memory_value[:-2])
-                    if memory_mib > 1024:
-                        add_issue(
-                            resource_type="Pod",
-                            resource_name=pod_name,
-                            namespace=namespace,
-                            status=f"HighMemory({memory_value})",
-                            severity="warning",
-                        )
-            except Exception:
-                pass
+    if total_pods > 0 and unhealthy_pod_count > 0 and raw_pod_penalty > 0:
+        unhealthy_ratio = unhealthy_pod_count / total_pods
+        scaled_pod_penalty = max(1, int(raw_pod_penalty * unhealthy_ratio))
+        score -= scaled_pod_penalty
 
     warning_events = 0
     for event in events:
@@ -449,7 +473,7 @@ def check_cluster_health(cluster_data: Dict[str, Any]) -> Dict[str, Any]:
         if event_type == "Warning":
             warning_events += 1
 
-    event_penalty = min(warning_events * 2, 10)
+    event_penalty = min(warning_events, 10)
     score -= event_penalty
 
     if warning_events > 0:
@@ -459,7 +483,13 @@ def check_cluster_health(cluster_data: Dict[str, Any]) -> Dict[str, Any]:
         score = 0
 
     healthy = len(issues) == 0
-    summary = "Cluster is healthy." if healthy else "Cluster is unhealthy."
+
+    if score >= 90:
+        summary = "Cluster is healthy."
+    elif score >= 70:
+        summary = "Cluster is degraded."
+    else:
+        summary = "Cluster is unhealthy."
 
     return {
         "healthy": healthy,

@@ -1,11 +1,20 @@
 import json
+from collections import Counter
 from difflib import get_close_matches
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from collectors import get_cluster_pods, get_nodes, get_pods
-from health import check_cluster_health, check_namespace_health, check_pod_health
+from collectors import (
+    get_cluster_events,
+    get_cluster_pod_metrics,
+    get_cluster_pods,
+    get_cluster_pvcs,
+    get_node_metrics,
+    get_nodes,
+    get_pods,
+)
+from Core.health import check_cluster_health, check_namespace_health, check_pod_health
 from help_text import get_help_text
-from intent_classification import classify_intent
+from Core.intent_classification import classify_intent
 
 try:
     from investigator import investigate_pod  # type: ignore
@@ -13,9 +22,26 @@ except Exception:
     investigate_pod = None
 
 try:
-    from llm import analyze_investigation  # type: ignore
+    from llm import (
+        analyze_cluster_health,  # type: ignore
+        analyze_investigation,  # type: ignore
+        analyze_namespace_health,  # type: ignore
+    )
 except Exception:
     analyze_investigation = None
+    analyze_namespace_health = None
+    analyze_cluster_health = None
+
+
+RESERVED_NON_WORKLOAD_NAMES = {
+    "cluster",
+    "namespace",
+    "namespaces",
+    "health",
+    "status",
+    "my",
+    "on",
+}
 
 
 def _normalize_confidence(value: Any) -> str:
@@ -134,6 +160,103 @@ def _process_unsupported_action(question: str, intent_result: Dict[str, Any]) ->
     return response
 
 
+def _healthy_recommendations() -> List[str]:
+    return [
+        "No action required. Continue monitoring.",
+        "Run Deep Analysis if application issues are observed despite healthy infrastructure status.",
+    ]
+
+
+def _append_ai_evidence(
+    raw_evidence: str,
+    category: str = "",
+    evidence_summary: str = "",
+    evidence_points: Optional[List[str]] = None,
+) -> str:
+    evidence_points = evidence_points or []
+    parts = [raw_evidence.strip()] if raw_evidence.strip() else []
+
+    if category and category != "Unknown":
+        parts.append(f"AI category: {category}")
+
+    if evidence_summary:
+        parts.append(f"AI evidence summary: {evidence_summary}")
+
+    if evidence_points:
+        formatted_points = "\n".join(f"- {point}" for point in evidence_points if point.strip())
+        if formatted_points:
+            parts.append(f"AI evidence points:\n{formatted_points}")
+
+    return "\n".join(parts).strip()
+
+
+def _apply_llm_deep_analysis_for_scope(
+    response: Dict[str, Any],
+    scope: str,
+    analysis_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    if response.get("status") == "Error":
+        return response
+
+    analyzer = None
+    if scope == "namespace":
+        analyzer = analyze_namespace_health
+    elif scope == "cluster":
+        analyzer = analyze_cluster_health
+
+    if analyzer is None:
+        recommendations = response.get("recommendations", []) or []
+        if not recommendations:
+            recommendations = _healthy_recommendations()
+        fallback_note = "Deep analysis was requested, but scope-specific LLM analysis is not available. Review the summary and evidence."
+        if fallback_note not in recommendations:
+            recommendations.append(fallback_note)
+        response["recommendations"] = recommendations
+        return response
+
+    try:
+        analysis_raw = analyzer(analysis_payload)
+        parsed = json.loads(analysis_raw) if isinstance(analysis_raw, str) else analysis_raw
+
+        if not isinstance(parsed, dict):
+            return response
+
+        llm_summary = str(parsed.get("summary", "")).strip()
+        llm_evidence = str(parsed.get("evidence", "")).strip()
+        evidence_points = parsed.get("evidence_points", [])
+        confidence = str(parsed.get("confidence", "")).strip()
+        recommendations = parsed.get("recommendations", [])
+
+        if llm_summary:
+            response["summary"] = llm_summary
+
+        if llm_evidence:
+            response["evidence"] = _append_ai_evidence(
+                raw_evidence=str(response.get("evidence", "")),
+                evidence_summary=llm_evidence,
+                evidence_points=evidence_points if isinstance(evidence_points, list) else [],
+            )
+
+        if confidence in {"High", "Medium", "Low"}:
+            response["confidence"] = confidence
+
+        if isinstance(recommendations, list):
+            cleaned_recommendations = [str(item).strip() for item in recommendations if str(item).strip()]
+            if cleaned_recommendations:
+                response["recommendations"] = cleaned_recommendations
+
+        if not response.get("recommendations"):
+            response["recommendations"] = _healthy_recommendations()
+
+        if scope in {"namespace", "cluster"} and "Deep analysis reviewed aggregated scope-level evidence." not in response["recommendations"]:
+            response["recommendations"].append("Deep analysis reviewed aggregated scope-level evidence.")
+
+        response["root_cause"] = ""
+        return response
+    except Exception:
+        return response
+
+
 def _match_workload_pods(
     pods: List[Dict[str, Any]],
     resource_name: str,
@@ -200,29 +323,6 @@ def _build_pod_issue_evidence(unhealthy_results: List[Dict[str, Any]]) -> str:
             lines.append(f"{namespace}/{pod_name}: unhealthy")
 
     return "\n".join(lines)
-
-
-def _append_ai_evidence(
-    raw_evidence: str,
-    category: str = "",
-    evidence_summary: str = "",
-    evidence_points: Optional[List[str]] = None,
-) -> str:
-    evidence_points = evidence_points or []
-    parts = [raw_evidence.strip()] if raw_evidence.strip() else []
-
-    if category and category != "Unknown":
-        parts.append(f"AI category: {category}")
-
-    if evidence_summary:
-        parts.append(f"AI evidence summary: {evidence_summary}")
-
-    if evidence_points:
-        formatted_points = "\n".join(f"- {point}" for point in evidence_points if point.strip())
-        if formatted_points:
-            parts.append(f"AI evidence points:\n{formatted_points}")
-
-    return "\n".join(parts).strip()
 
 
 def _get_all_namespaces_from_cluster() -> List[str]:
@@ -546,6 +646,26 @@ def _maybe_run_deep_rca(
         return fallback
 
 
+def _build_scope_issue_groups_from_text(evidence_text: str) -> List[Dict[str, Any]]:
+    groups: Dict[str, Dict[str, Any]] = {}
+
+    lines = [line.strip() for line in str(evidence_text or "").splitlines() if line.strip()]
+    for line in lines:
+        if ":" not in line:
+            continue
+
+        left, right = line.split(":", 1)
+        status = right.strip() or "Unknown"
+        subject = left.strip()
+
+        group = groups.setdefault(status, {"status": status, "count": 0, "examples": []})
+        group["count"] += 1
+        if len(group["examples"]) < 3:
+            group["examples"].append(subject)
+
+    return sorted(groups.values(), key=lambda item: (-int(item["count"]), item["status"]))
+
+
 def _process_resource_listing(question: str, intent_result: Dict[str, Any]) -> Dict[str, Any]:
     resource_type = intent_result.get("resource_type", "")
     namespace = intent_result.get("namespace", "")
@@ -597,6 +717,9 @@ def _process_resource_listing(question: str, intent_result: Dict[str, Any]) -> D
 
             if status_filter == "All":
                 include = True
+            elif status_filter == "Healthy":
+                include = pod_health.get("healthy", False)
+                status_text = "Healthy"
             elif status_filter == "Running":
                 include = phase == "Running" and pod_health.get("healthy", False)
                 status_text = "Running"
@@ -691,20 +814,43 @@ def _process_resource_listing(question: str, intent_result: Dict[str, Any]) -> D
             pod_results = [check_pod_health(pod) for pod in workload_pods]
             healthy_count = sum(1 for result in pod_results if result.get("healthy", False))
             unhealthy_results = [result for result in pod_results if not result.get("healthy", False)]
+            all_issues_text = " ".join(
+                issue.lower()
+                for result in unhealthy_results
+                for issue in (result.get("issues", []) or [])
+            )
 
             include = False
             status_text = f"{healthy_count}/{len(workload_pods)} healthy"
 
-            if status_filter == "Unhealthy":
+            if status_filter == "All":
+                include = True
+            elif status_filter == "Healthy":
+                include = len(unhealthy_results) == 0
+                status_text = "Healthy"
+            elif status_filter == "Running":
+                include = len(unhealthy_results) == 0 and len(workload_pods) > 0
+                status_text = "Running"
+            elif status_filter == "Pending":
+                include = any("pending" in issue.lower() for result in pod_results for issue in (result.get("issues", []) or []))
+                status_text = "Pending"
+            elif status_filter == "Unhealthy":
                 include = len(unhealthy_results) > 0
                 if unhealthy_results and unhealthy_results[0].get("issues"):
                     status_text = unhealthy_results[0]["issues"][0]
                 elif unhealthy_results:
                     status_text = "Unhealthy"
-            elif status_filter == "All":
-                include = True
+            elif status_filter == "CrashLoopBackOff":
+                include = "crashloopbackoff" in all_issues_text
+                status_text = "CrashLoopBackOff"
+            elif status_filter == "ImagePullBackOff":
+                include = ("imagepullbackoff" in all_issues_text) or ("errimagepull" in all_issues_text)
+                status_text = "ImagePullBackOff"
 
             if include:
+                if status_filter == "All" and unhealthy_results and unhealthy_results[0].get("issues"):
+                    status_text = unhealthy_results[0]["issues"][0]
+
                 items.append(
                     {
                         "resource_type": "Workload",
@@ -740,11 +886,24 @@ def _process_pod_investigation(
     intent_result: Dict[str, Any],
     deep: bool = False,
 ) -> Dict[str, Any]:
-    resource_name = intent_result.get("resource_name", "")
+    resource_name = (intent_result.get("resource_name", "") or "").strip()
     namespace_hint = intent_result.get("namespace", "")
 
     if not resource_name:
         return _build_ambiguous_intent_response(question, intent_result)
+
+    if resource_name.lower() in RESERVED_NON_WORKLOAD_NAMES:
+        return _build_error_response(
+            question=question,
+            message=(
+                f"'{resource_name}' is not a valid workload target for pod investigation. "
+                "Please use a cluster, namespace, or workload-specific prompt."
+            ),
+            intent_result=intent_result,
+            resource=resource_name,
+            resource_type="Workload",
+            confidence="High",
+        )
 
     if namespace_hint:
         namespace_validation_result = get_pods(namespace_hint)
@@ -821,6 +980,7 @@ def _process_pod_investigation(
                     f"Matched pods: {total_count}, healthy: {healthy_count}, unhealthy: {unhealthy_count}."
                 ),
                 "confidence": "High",
+                "recommendations": _healthy_recommendations(),
             }
         )
         return response
@@ -907,6 +1067,7 @@ def _process_namespace_health(question: str, intent_result: Dict[str, Any]) -> D
                 "health_score": health_result.get("score", 100),
                 "summary": f"Namespace '{namespace}' is healthy.",
                 "confidence": "High",
+                "recommendations": _healthy_recommendations(),
             }
         )
         return response
@@ -931,47 +1092,97 @@ def _process_namespace_health(question: str, intent_result: Dict[str, Any]) -> D
     return response
 
 
+def _process_deep_namespace_health(question: str, intent_result: Dict[str, Any]) -> Dict[str, Any]:
+    response = _process_namespace_health(question, intent_result)
+
+    analysis_payload = {
+        "namespace": intent_result.get("resource_name", ""),
+        "health_score": int(response.get("health_score", 0) or 0),
+        "summary": str(response.get("summary", "")),
+        "evidence": str(response.get("evidence", "")),
+        "issue_groups": _build_scope_issue_groups_from_text(str(response.get("evidence", ""))),
+    }
+
+    return _apply_llm_deep_analysis_for_scope(
+        response=response,
+        scope="namespace",
+        analysis_payload=analysis_payload,
+    )
+
+
 def _build_cluster_recommendations(issues: List[Dict[str, Any]]) -> List[str]:
     recommendations: List[str] = []
 
     if not issues:
         return recommendations
 
-    first_issue = issues[0]
-    if isinstance(first_issue, dict):
-        resource_type = first_issue.get("resource_type", "")
-        resource_name = first_issue.get("resource_name", "")
-        namespace = first_issue.get("namespace", "")
-        status = first_issue.get("status", "")
+    pod_status_counter = Counter()
+    namespace_counter = Counter()
+    node_issues = []
+    pvc_issues = []
+
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+
+        resource_type = issue.get("resource_type", "")
+        resource_name = issue.get("resource_name", "")
+        namespace = issue.get("namespace", "")
+        status = issue.get("status", "")
 
         if resource_type == "Pod":
+            pod_status_counter[status] += 1
             if namespace:
-                recommendations.append(
-                    f"Investigate pod '{resource_name}' in namespace '{namespace}' because it is reporting '{status}'."
-                )
-                if "-" in resource_name:
-                    workload_name = resource_name.rsplit("-", 2)[0] if resource_name.count("-") >= 2 else resource_name
-                    recommendations.append(
-                        f"Check the workload '{workload_name}' in namespace '{namespace}' to see whether other replicas are affected."
-                    )
-            else:
-                recommendations.append(
-                    f"Investigate pod '{resource_name}' because it is reporting '{status}'."
-                )
+                namespace_counter[namespace] += 1
         elif resource_type == "Node":
+            node_issues.append((resource_name, status))
+        elif resource_type == "PVC":
+            pvc_issues.append((namespace, resource_name, status))
+
+    for status, count in pod_status_counter.most_common(2):
+        recommendations.append(
+            f"Investigate pods reporting '{status}' across the cluster ({count} affected)."
+        )
+
+    for namespace, count in namespace_counter.most_common(2):
+        recommendations.append(
+            f"Review unhealthy workloads in namespace '{namespace}' ({count} affected resources)."
+        )
+
+    if node_issues:
+        node_name, status = node_issues[0]
+        recommendations.append(
+            f"Investigate node '{node_name}' because it is reporting '{status}'."
+        )
+
+    if pvc_issues:
+        namespace, pvc_name, status = pvc_issues[0]
+        if namespace:
             recommendations.append(
-                f"Investigate node '{resource_name}' because it is reporting '{status}'."
+                f"Check PVC '{pvc_name}' in namespace '{namespace}' because it is reporting '{status}'."
+            )
+        else:
+            recommendations.append(
+                f"Check PVC '{pvc_name}' because it is reporting '{status}'."
             )
 
-    if not recommendations:
-        recommendations.append("Investigate the unhealthy resources reported in the cluster.")
+    deduped = []
+    seen = set()
+    for rec in recommendations:
+        if rec not in seen:
+            deduped.append(rec)
+            seen.add(rec)
 
-    return recommendations
+    return deduped[:4] if deduped else ["Investigate the unhealthy resources reported in the cluster."]
 
 
 def _process_cluster_health(question: str, intent_result: Dict[str, Any]) -> Dict[str, Any]:
     nodes_result = get_nodes()
     pods_result = get_cluster_pods()
+    pvcs_result = get_cluster_pvcs()
+    events_result = get_cluster_events()
+    node_metrics_result = get_node_metrics()
+    pod_metrics_result = get_cluster_pod_metrics()
 
     if not nodes_result.get("success", False):
         return _build_error_response(
@@ -995,13 +1206,16 @@ def _process_cluster_health(question: str, intent_result: Dict[str, Any]) -> Dic
 
     nodes = ((nodes_result.get("data") or {}).get("items")) or []
     pods = ((pods_result.get("data") or {}).get("items")) or []
+    pvcs = ((pvcs_result.get("data") or {}).get("items")) if pvcs_result.get("success", False) else []
+    events = ((events_result.get("data") or {}).get("items")) if events_result.get("success", False) else []
 
     cluster_data = {
         "nodes": nodes,
         "pods": pods,
-        "events": [],
-        "node_metrics": {},
-        "pod_metrics": {},
+        "pvcs": pvcs,
+        "events": events,
+        "node_metrics": node_metrics_result if node_metrics_result.get("success", False) else {},
+        "pod_metrics": pod_metrics_result if pod_metrics_result.get("success", False) else {},
     }
 
     health_result = check_cluster_health(cluster_data)
@@ -1020,6 +1234,7 @@ def _process_cluster_health(question: str, intent_result: Dict[str, Any]) -> Dic
                 "health_score": health_result.get("score", 100),
                 "summary": health_result.get("summary", "Cluster is healthy."),
                 "confidence": "High",
+                "recommendations": _healthy_recommendations(),
             }
         )
         return response
@@ -1049,6 +1264,23 @@ def _process_cluster_health(question: str, intent_result: Dict[str, Any]) -> Dic
         }
     )
     return response
+
+
+def _process_deep_cluster_health(question: str, intent_result: Dict[str, Any]) -> Dict[str, Any]:
+    response = _process_cluster_health(question, intent_result)
+    analysis_payload = {
+        "health_score": int(response.get("health_score", 0) or 0),
+        "summary": str(response.get("summary", "")),
+        "evidence": str(response.get("evidence", "")),
+        "issue_groups": _build_scope_issue_groups_from_text(str(response.get("evidence", ""))),
+        "affected_namespaces": [],
+    }
+
+    return _apply_llm_deep_analysis_for_scope(
+        response=response,
+        scope="cluster",
+        analysis_payload=analysis_payload,
+    )
 
 
 def process_question(question: str) -> Dict[str, Any]:
@@ -1086,8 +1318,14 @@ def process_question(question: str) -> Dict[str, Any]:
     if intent == "NamespaceHealth":
         return _process_namespace_health(question, intent_result)
 
+    if intent == "DeepNamespaceHealth":
+        return _process_deep_namespace_health(question, intent_result)
+
     if intent == "ClusterHealth":
         return _process_cluster_health(question, intent_result)
+
+    if intent == "DeepClusterHealth":
+        return _process_deep_cluster_health(question, intent_result)
 
     return _build_error_response(
         question=question,
