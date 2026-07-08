@@ -144,6 +144,10 @@ python3.11 ask_controller.py "show running pods in rstudioworkbench namespace"
 python3.11 ask_controller.py "perform rca on chaos namespace"
 ```
 
+## 🎥 KubeSage Demo
+
+https://github.com/user-attachments/assets/d43b629e-c926-4b26-871a-2827098059b4
+
 ## ✅ Current capabilities
 
 - cluster health summary
